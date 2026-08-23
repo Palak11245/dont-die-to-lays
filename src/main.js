@@ -481,8 +481,9 @@ if (!SHOWCASE && !IS_P2) import('./x2-broadcast.js').then(({ startBroadcast, sto
       .then((r) => r.json())
       .then(({ version }) => {
         appliedSkin = version;
-        console.log(`[arena] shared with P2 as v${version}`);
-        onStatus('arena shared with P2');
+        console.log(`[arena] published to room "${ROOM}" as v${version}`);
+        onStatus('arena published — share the link');
+        showShare();
       })
       .catch((e) => console.warn('[arena] could not share the skin:', e.message));
 
@@ -846,6 +847,10 @@ function connectRelay() {
     if (n) console.log(`[net] recv ${m.type} #${n}`, m.type === 'state'
       ? { t: m.t, players: m.players, obstacles: m.obstacles.length, events: m.events.length }
       : m);
+    if (!joined) {
+      const st = document.getElementById('shareState');
+      if (st) { st.textContent = 'player 2 connected'; st.style.color = '#4ade80'; }
+    }
     joined = true; // any message at all proves the peer is there — not just hello
     if (m.type === 'hello') {
       send({ type: 'init', playerIndex: 1, arenaUrl: '/arena.json', photoUrl: '/room.jpg' });
@@ -1074,18 +1079,25 @@ tick();
 
 // The match is gated on the loadout screen. The weapon goes over the wire once, here; the
 // thumb stays on this laptop and only ever becomes the local viewmodel.
-// The host shows an invite link so the other player lands in the same room as P2.
-if (!SHOWCASE && !IS_JOINER) {
-  const box = document.getElementById('invite');
-  const field = document.getElementById('inviteLink');
+// Host: the arena exists and is published, so this is the moment to hand over the link.
+const shareEl = document.getElementById('share');
+function showShare() {
+  const field = document.getElementById('shareLink');
   field.value = inviteLink();
-  box.style.display = 'block';
-  document.getElementById('copyInvite').addEventListener('click', async () => {
-    field.select();
-    try { await navigator.clipboard.writeText(field.value); } catch { document.execCommand('copy'); }
-    document.getElementById('copyInvite').textContent = 'copied';
-  });
+  shareEl.style.display = 'flex';
+  blocker.style.display = 'none';
+  controls.unlock();
 }
+document.getElementById('shareCopy').addEventListener('click', async () => {
+  const field = document.getElementById('shareLink');
+  field.select();
+  try { await navigator.clipboard.writeText(field.value); } catch { document.execCommand('copy'); }
+  document.getElementById('shareCopy').textContent = 'copied';
+});
+document.getElementById('sharePlay').addEventListener('click', () => {
+  shareEl.style.display = 'none';
+  if (winner === null) blocker.style.display = 'flex';
+});
 
 // P2 waits here while P1 builds the arena. Dismissable, so a P1 who never makes one
 // cannot strand P2 on a loading screen.
