@@ -1,0 +1,14 @@
+# Render blueprint for the game server: relay + vision + token, all on one port.
+services:
+  - type: web
+    name: arena-server
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: node server/index.js
+    healthCheckPath: /health
+    envVars:
+      - key: ANTHROPIC_API_KEY
+        sync: false   # set in the Render dashboard, never in this file
+      - key: REACTOR_API_KEY
+        sync: false

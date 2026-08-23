@@ -1,0 +1,28 @@
+{
+  "name": "arena",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "dev:booth": "vite --mode booth --host",
+    "build": "vite build",
+    "build:booth": "vite build --mode booth",
+    "preview": "vite preview",
+    "server": "node server/index.js",
+    "start": "node server/index.js"
+  },
+  "devDependencies": {
+    "vite": "^8.2.0"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.120.0",
+    "@reactor-models/x2": "^0.7.0",
+    "@reactor-team/js-sdk": "^2.12.3",
+    "three": "^0.185.1",
+    "ws": "^8.21.3"
+  },
+  "engines": {
+    "node": ">=20.12"
+  }
+}

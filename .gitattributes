@@ -1,0 +1,4 @@
+# core.autocrlf is on. Never let line-ending conversion near the arena assets.
+*.jpg  binary
+*.jpeg binary
+*.png  binary

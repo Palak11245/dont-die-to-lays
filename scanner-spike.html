@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Scanner spike</title>
+<style>
+  :root { --bg:#0d0f12; --fg:#e8e6e0; --dim:#7c7f86; --line:#22262c; --hot:#4ade80; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:14px/1.6 ui-monospace,SFMono-Regular,Menlo,monospace; padding:24px; }
+  h1 { font-size:15px; font-weight:500; letter-spacing:.08em; text-transform:uppercase; color:var(--dim); margin:0 0 20px; }
+  .wrap { display:grid; grid-template-columns:1fr 1fr; gap:24px; max-width:900px; }
+  @media (max-width:720px){ .wrap{ grid-template-columns:1fr; } }
+  video,canvas.preview { width:100%; border:1px solid var(--line); background:#000; display:block; }
+  button { font:inherit; background:transparent; color:var(--fg); border:1px solid var(--line); padding:10px 16px; cursor:pointer; width:100%; margin-top:10px; }
+  button:hover:not(:disabled) { border-color:var(--hot); color:var(--hot); }
+  button:disabled { color:var(--dim); cursor:not-allowed; }
+  button:focus-visible { outline:2px solid var(--hot); outline-offset:2px; }
+  #status { color:var(--dim); min-height:2.4em; margin-top:10px; }
+  .axis { margin-bottom:10px; }
+  .axis-top { display:flex; justify-content:space-between; font-size:12px; color:var(--dim); }
+  .track { height:6px; background:var(--line); margin-top:4px; }
+  .fill { height:100%; background:var(--hot); width:0; transition:width .25s; }
+  table { width:100%; border-collapse:collapse; margin-top:20px; }
+  td { padding:5px 0; border-bottom:1px solid var(--line); }
+  td:last-child { text-align:right; color:var(--hot); }
+  #name { font-size:22px; margin:20px 0 0; letter-spacing:-.01em; }
+  #swatch { display:inline-block; width:14px; height:14px; vertical-align:-2px; margin-right:8px; border:1px solid var(--line); }
+  input[type=file] { margin-top:10px; color:var(--dim); font:inherit; width:100%; }
+</style>
+</head>
+<body>
+<h1>Property scanner spike</h1>
+<div class="wrap">
+  <div>
+    <video id="cam" autoplay muted playsinline></video>
+    <canvas id="shot" class="preview" width="224" height="224" hidden></canvas>
+    <button id="scan" disabled>Loading…</button>
+    <input type="file" id="file" accept="image/*">
+    <p id="status">Property scoring via Claude vision. Run <code>npm run vision</code> first.</p>
+  </div>
+  <div>
+    <div id="axes"></div>
+    <p id="name"><span id="swatch"></span><span id="nameText">No scan yet</span></p>
+    <table id="stats"></table>
+  </div>
+</div>
+
+<script type="module">
+// Axes, formulas and naming live in src/weapon.js so the spike and the game cannot drift.
+import { AXES, dominantColour, toCss, toHex, weaponFrom } from './src/weapon.js';
+// Same Claude vision endpoint the game uses. Run `npm run vision` first, and open this
+// through the dev server (http://localhost:5173/scanner-spike.html), never as file://.
+const SCAN_URL = '/scan'; // proxied to server/vision.js by vite.config.js
+
+const $ = id => document.getElementById(id);
+const cam = $('cam'), shot = $('shot'), scanBtn = $('scan'), status = $('status');
+
+$('axes').innerHTML = AXES.map(a => `
+  <div class="axis">
+    <div class="axis-top"><span>${a.key}</span><span id="v-${a.key}">—</span></div>
+    <div class="track"><div class="fill" id="f-${a.key}"></div></div>
+  </div>`).join('');
+
+try {
+  const s = await navigator.mediaDevices.getUserMedia({ video:{ width:640, height:480 } });
+  cam.srcObject = s;
+} catch {
+  cam.hidden = true;
+  status.textContent = 'No camera. Use the file picker below instead.';
+}
+
+scanBtn.disabled = false;
+scanBtn.textContent = 'Scan';
+status.textContent = 'Ready. Hold an object up and scan it.';
+
+async function scan(source) {
+  scanBtn.disabled = true;
+  status.textContent = 'Scanning…';
+  const ctx = shot.getContext('2d', { willReadFrequently:true });
+  ctx.drawImage(source, 0, 0, 224, 224);
+  shot.hidden = false;
+  cam.hidden = true;
+
+  const r = await fetch(SCAN_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ image: shot.toDataURL('image/jpeg') })
+  });
+  if (!r.ok) throw new Error(`vision server: HTTP ${r.status} ${await r.text()}`);
+  const p = await r.json();
+  for (const a of AXES) {
+    $(`v-${a.key}`).textContent = p[a.key].toFixed(2);
+    $(`f-${a.key}`).style.width = (p[a.key] * 100) + '%';
+  }
+
+  // All seven fields, exactly as they go over the socket.
+  const rgb = dominantColour(ctx);
+  const weapon = weaponFrom(p, toHex(rgb));
+  const units = { damage:'hp', fireRate:'shots/s', spread:'deg', knockback:'px/s', pellets:'', colour:'' };
+  $('stats').innerHTML = ['damage','fireRate','spread','knockback','pellets','colour']
+    .map(k => `<tr><td>${k}</td><td>${
+      k === 'colour' ? '#' + weapon.colour.toString(16).padStart(6, '0') : weapon[k] + ' ' + units[k]
+    }</td></tr>`).join('');
+
+  $('swatch').style.background = toCss(rgb);
+  $('nameText').textContent = weapon.name;
+
+  console.log('weapon', weapon);
+  status.textContent = 'Done. Scan again to compare.';
+  scanBtn.disabled = false;
+  scanBtn.textContent = 'Scan again';
+}
+
+scanBtn.addEventListener('click', () => {
+  if (cam.hidden && cam.srcObject) { cam.hidden = false; shot.hidden = true; return; }
+  if (cam.srcObject) scan(cam);
+  else status.textContent = 'Pick an image file first.';
+});
+
+$('file').addEventListener('change', e => {
+  const f = e.target.files[0];
+  if (!f) return;
+  const img = new Image();
+  img.onload = () => scan(img);
+  img.src = URL.createObjectURL(f);
+});
+</script>
+</body>
+</html>

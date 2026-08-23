@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>arena</title>
+    <style>
+      body { margin: 0; overflow: hidden; background: #12141a; font: 14px system-ui, sans-serif; color: #fff; }
+      canvas { display: block; }
+      #blocker { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
+                 background: rgba(0,0,0,.6); cursor: pointer; }
+      #blocker p { text-align: center; line-height: 1.8; }
+      #crosshair { position: fixed; left: 50%; top: 50%; width: 14px; height: 14px; margin: -7px 0 0 -7px;
+                   pointer-events: none; }
+      #crosshair::before, #crosshair::after { content: ''; position: absolute; background: #fff; opacity: .8; }
+      #crosshair::before { left: 6px; top: 0; width: 2px; height: 14px; }
+      #crosshair::after { top: 6px; left: 0; height: 2px; width: 14px; }
+      #hud { position: fixed; left: 16px; bottom: 14px; pointer-events: none; opacity: .85; }
+      /* the broadcast feed, kept on screen so the canvas is composited and captureStream
+         is not throttled — and so P1 can see what the projector is getting */
+      #spectator { position: fixed; right: 12px; bottom: 12px; width: 224px; height: 126px;
+                   border: 1px solid #ffffff30; opacity: .8; pointer-events: none; z-index: 2; }
+
+      /* broadcast panel — B toggles. The orbit canvas is re-parented in here when open, so it
+         stays the same element and the captureStream track it feeds X2 is never interrupted. */
+      /* flex column: the control bar is a fixed-height row that never shrinks, and only the
+         media area scrolls. The buttons cannot be pushed out of frame at any window size. */
+      #broadcast { position: fixed; inset: 0; z-index: 20; display: none;
+                   flex-direction: column; background: #0d0f12f2; padding: 14px 20px 20px; }
+      #broadcast .pair { flex: 1 1 auto; min-height: 0; overflow: auto;
+                         display: grid; grid-template-columns: 1fr 1fr; gap: 16px;
+                         align-content: start; }
+      @media (max-width: 800px) { #broadcast .pair { grid-template-columns: 1fr; } }
+      #broadcast figure { margin: 0; }
+      #broadcast figcaption { font-size: 12px; letter-spacing: .1em; text-transform: uppercase;
+                              color: #7c7f86; margin-bottom: 6px; }
+      /* capped so the two panes can never grow tall enough to push the controls off-screen */
+      #broadcast #spectator, #broadcast video { position: static; width: 100%; height: auto;
+                              max-height: 46vh; object-fit: contain; aspect-ratio: 16/9;
+                              opacity: 1; background: #000; border: 1px solid #22262c;
+                              display: block; }
+      #broadcast .bar { flex: 0 0 auto; display: flex; gap: 10px; align-items: center;
+                        flex-wrap: wrap; padding-bottom: 14px; }
+      #broadcast button { font: inherit; background: transparent; color: #e8e6e0;
+                          border: 1px solid #22262c; padding: 9px 18px; cursor: pointer; }
+      #broadcast button:hover:not(:disabled) { border-color: #4ade80; color: #4ade80; }
+      #broadcast button:disabled { color: #7c7f86; cursor: not-allowed; }
+      #skinBtn { border-color: #2f6b3a; }
+      #skinBtn:hover:not(:disabled) { border-color: #4ade80; color: #4ade80; }
+      #stopBtn { border-color: #6b2f2f; }
+      #stopBtn:hover:not(:disabled) { border-color: #ff5c5c; color: #ff5c5c; }
+      #x2status { color: #7c7f86; font-size: 13px; }
+      #result { position: fixed; inset: 0; display: none; flex-direction: column; gap: 10px;
+                align-items: center; justify-content: center; background: rgba(0,0,0,.72); }
+      #result b { font-size: 64px; letter-spacing: 4px; }
+      #result span { opacity: .7; letter-spacing: 2px; }
+
+      #waiting { position: fixed; inset: 0; z-index: 9; display: none; flex-direction: column;
+                 gap: 14px; align-items: center; justify-content: center; background: #0d0f12f2; }
+      #waiting b { font-size: 30px; letter-spacing: 1px; }
+      #waiting span { opacity: .6; font-size: 14px; }
+      #waiting button { font: inherit; margin-top: 10px; background: transparent; color: #7c7f86;
+                        border: 1px solid #22262c; padding: 9px 18px; cursor: pointer; }
+      #waiting button:hover { border-color: #4ade80; color: #4ade80; }
+      #waiting.ready b { color: #4ade80; }
+      .pulse { width: 46px; height: 46px; border-radius: 50%; border: 2px solid #2aa8b8;
+               animation: pulse 1.4s ease-out infinite; }
+      @keyframes pulse { 0% { transform: scale(.6); opacity: 1; }
+                         100% { transform: scale(1.5); opacity: 0; } }
+      #loadout { position: fixed; inset: 0; z-index: 10; display: flex; align-items: center;
+                 justify-content: center; background: #0d0f12; }
+      #loadout .panel { width: min(760px, 92vw); display: grid; grid-template-columns: 1fr 1fr;
+                        gap: 22px; align-items: start; }
+      @media (max-width: 700px) { #loadout .panel { grid-template-columns: 1fr; } }
+      #loadout h2 { grid-column: 1/-1; margin: 0; font-size: 13px; letter-spacing: .12em;
+                    text-transform: uppercase; color: #7c7f86; font-weight: 500; }
+      .viewport { position: relative; aspect-ratio: 1; background: #000; border: 1px solid #22262c; }
+      .viewport video, .viewport canvas { width: 100%; height: 100%; object-fit: cover; display: block; }
+      .viewport canvas { display: none; }
+      /* circular framing guide: centre the object here and the alpha falloff does the rest */
+      .guide { position: absolute; inset: 12%; border: 1px dashed #4ade8066; border-radius: 50%;
+               pointer-events: none; }
+      #loadout button, #loadout input { font: inherit; width: 100%; margin-top: 8px;
+        background: transparent; color: #e8e6e0; border: 1px solid #22262c; padding: 9px 14px; }
+      #loadout button:hover:not(:disabled) { border-color: #4ade80; color: #4ade80; cursor: pointer; }
+      #loadout button:disabled { color: #7c7f86; }
+      #scanStatus { color: #7c7f86; min-height: 2.2em; margin: 10px 0 0; font-size: 13px; }
+      #invite { display: none; margin-top: 14px; padding-top: 12px; border-top: 1px solid #22262c; }
+      #invite span { display: block; color: #7c7f86; font-size: 12px; margin-bottom: 6px; }
+      #invite input { width: 100%; font: 12px ui-monospace, monospace; background: #12141a;
+                      color: #4ade80; border: 1px solid #22262c; padding: 7px 9px; }
+      #weaponCard { display: none; }
+      #weaponCard h3 { margin: 0 0 10px; font-size: 20px; font-weight: 500; }
+      #weaponCard i { display: inline-block; width: 13px; height: 13px; margin-right: 8px;
+                      border: 1px solid #22262c; }
+      #weaponCard div { display: flex; justify-content: space-between; padding: 4px 0;
+                        border-bottom: 1px solid #22262c; font-size: 13px; }
+      #weaponCard span { color: #7c7f86; }
+      #weaponCard b { color: #4ade80; font-weight: 500; }
+    </style>
+  </head>
+  <body>
+    <div id="blocker"><p><b>click to play</b><br>WASD move &nbsp;·&nbsp; space jump &nbsp;·&nbsp; mouse look &nbsp;·&nbsp; click fire &nbsp;·&nbsp; R reload &nbsp;·&nbsp; esc release</p></div>
+    <div id="crosshair"></div>
+    <div id="hud"></div>
+    <div id="result"></div>
+
+    <div id="waiting">
+      <div class="pulse"></div>
+      <b>P1 is building the arena</b>
+      <span>buckle up &mdash; you will drop straight in when it is ready</span>
+      <button id="waitSkip">play the flat arena instead</button>
+    </div>
+
+    <div id="broadcast">
+      <div class="bar">
+        <button id="startBtn">1 &middot; connect &amp; generate</button>
+        <button id="stopBtn" disabled>stop &amp; disconnect</button>
+        <button id="skinBtn" disabled>2 &middot; enter this arena</button>
+        <span id="x2status">idle</span>
+        <span style="flex:1"></span>
+        <span style="color:#7c7f86;font-size:12px">B closes &middot; auto-disconnect at 2:00</span>
+      </div>
+      <div class="pair">
+        <figure>
+          <figcaption>source &mdash; spectator orbit</figcaption>
+          <div id="orbitSlot"></div>
+        </figure>
+        <figure>
+          <figcaption>x2 output &mdash; main_video</figcaption>
+          <video id="x2out" autoplay playsinline muted></video>
+        </figure>
+      </div>
+    </div>
+
+    <div id="loadout">
+      <div class="panel">
+        <h2>scan your weapon</h2>
+        <div>
+          <div class="viewport">
+            <video id="cam" autoplay muted playsinline></video>
+            <canvas id="shot" width="224" height="224"></canvas>
+            <div class="guide"></div>
+          </div>
+          <button id="scanBtn">scan</button>
+          <input type="file" id="fileInput" accept="image/*" />
+        </div>
+        <div>
+          <div id="weaponCard"></div>
+          <p id="scanStatus">hold an object up and scan it</p>
+          <div id="invite">
+            <span>send this to your opponent &mdash; same room, they join as P2</span>
+            <input id="inviteLink" readonly />
+            <button id="copyInvite">copy invite link</button>
+          </div>
+          <button id="enterBtn">skip &mdash; use the default gun</button>
+        </div>
+      </div>
+    </div>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
