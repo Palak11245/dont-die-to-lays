@@ -703,6 +703,10 @@ function fire(shooter, weapon, origin, forward) {
   cooldowns[shooter] = 60 / weapon.fireRate;
   const targets = [...obstacleMeshes, ...hitboxes.filter((h) => h.userData.player !== shooter)];
   const jitter = THREE.MathUtils.degToRad(weapon.spread) / 2;
+  // `damage` is the damage of the SHOT, shared across its pellets — otherwise a 5-pellet
+  // scattergun dealt 5x damage and killed a full-health player in a single trigger pull.
+  // A full-on hit now does about `damage`; a glancing hit that lands two pellets does less.
+  const perPellet = Math.max(1, Math.round(weapon.damage / Math.max(1, weapon.pellets)));
   events.push({ e: 'shot', from: shooter, ox: origin.x, oy: origin.y, oz: origin.z,
                 dx: forward.x, dy: forward.y, dz: forward.z });
 
@@ -719,7 +723,7 @@ function fire(shooter, weapon, origin, forward) {
     if (hit && hit.object.userData.player !== undefined) {
       const target = players[hit.object.userData.player];
       const was = target.hp;
-      target.hp = Math.max(0, target.hp - weapon.damage);
+      target.hp = Math.max(0, target.hp - perPellet);
       target.kb.copy(_dir).multiplyScalar(weapon.knockback / 100);
       target.kbT = 0.2;
       if (was > 0 && target.hp === 0) {
@@ -729,7 +733,7 @@ function fire(shooter, weapon, origin, forward) {
       }
     } else if (hit && hit.object.userData.ob) {
       const ob = hit.object.userData.ob;
-      ob.hp = Math.max(0, ob.hp - weapon.damage);
+      ob.hp = Math.max(0, ob.hp - perPellet);
       if (ob.hp === 0) breakObstacle(ob); // stays broken: nothing ever repairs it
       else paint(ob);
     }
