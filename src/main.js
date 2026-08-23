@@ -129,6 +129,11 @@ if (!SHOWCASE) {
     if (!version || version === appliedSkin) return;
     appliedSkin = version;
     const img = new Image();
+    // The image comes from the API host, not the page host. Without crossOrigin the texture
+    // taints the WebGL context and the arena silently refuses to render. The server sends
+    // Access-Control-Allow-Origin: *, so anonymous is enough.
+    img.crossOrigin = 'anonymous';
+    img.onerror = () => console.error('[arena] skin image failed to load —', img.src);
     img.onload = () => {
       skinArena(img);
       console.log(`[arena] shared X2 skin v${version} applied (${img.width}x${img.height})`);
@@ -802,16 +807,36 @@ function sendInput() {
   });
 }
 
-if (!SHOWCASE) {
+// Reconnecting socket. A free host that is asleep refuses the first connection, and a single
+// attempt at page load meant P2 sat there with no state and could not move. Retries with
+// backoff, and re-announces itself on every successful open.
+let netAttempt = 0;
+let inputTimer = null;
+
+function connectRelay() {
+  netAttempt++;
+  console.log(`[net] connecting (attempt ${netAttempt})`, RELAY_URL);
   sock = new WebSocket(RELAY_URL);
-  sock.addEventListener('open', () => console.log('[net] open', RELAY_URL));
-  sock.addEventListener('error', () => console.log('[net] failed', RELAY_URL));
+
+  const retry = () => {
+    if (sock && sock.readyState === 1) return;
+    const wait = Math.min(8000, 700 * netAttempt);
+    console.warn(`[net] disconnected — retrying in ${wait}ms`);
+    setTimeout(connectRelay, wait);
+  };
+  sock.addEventListener('error', retry);
+  sock.addEventListener('close', retry);
+
+  sock.addEventListener('open', () => {
+    netAttempt = 0;
+    console.log('[net] OPEN', RELAY_URL);
+  });
   sock.addEventListener('open', () => {
     if (IS_P2) {
       // Retry until P1 answers. A single hello is lost whenever P1 connects second or reloads.
       const hi = setInterval(() => (joined ? clearInterval(hi) : send({ type: 'hello' })), 500);
       send({ type: 'hello' });
-      setInterval(sendInput, 33);
+      if (!inputTimer) inputTimer = setInterval(sendInput, 33); // once, not once per reconnect
     }
     send({ type: 'loadout', weapon: weapons[LOCAL] });
   });
@@ -857,6 +882,10 @@ if (!SHOWCASE) {
       }
     }
   });
+}
+
+if (!SHOWCASE) {
+  connectRelay();
   if (!IS_P2) setInterval(sendState, 50);
 }
 
