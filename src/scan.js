@@ -10,7 +10,10 @@ import { api } from './net-config.js';
 // Same-origin path, proxied to server/vision.js on 8092 by vite.config.js. Start it with
 // `npm run vision`; without it every scan is a connection refused.
 const SCAN_URL = api('/scan');
-const SCAN_TIMEOUT_MS = 20_000;
+// A free-tier host (Render, Fly) sleeps when idle and takes 30-60s to wake, so the FIRST
+// scan after a quiet spell is slow. 20s was shorter than a cold start, which meant the very
+// first scan always fell back to local analysis. 75s covers the wake plus the vision call.
+const SCAN_TIMEOUT_MS = 75_000;
 
 const $ = (id) => document.getElementById(id);
 
@@ -231,6 +234,9 @@ export function loadoutScreen(defaultWeapon) {
     async function scan(source) {
       scanBtn.disabled = true;
       ok('scanning…');
+      // A cold server can take most of a minute; say so rather than looking frozen.
+      const slow = setTimeout(() => ok('waking the scan server… (first scan only)'), 4000);
+      const slower = setTimeout(() => ok('still waking — free hosting cold start, hold on'), 20000);
       const ctx = shot.getContext('2d', { willReadFrequently: true });
       ctx.drawImage(source, 0, 0, 224, 224);
       shot.style.display = 'block';
@@ -250,12 +256,16 @@ export function loadoutScreen(defaultWeapon) {
         if (!r.ok) throw new Error(`HTTP ${r.status} — ${(await r.text()).slice(0, 200)}`);
         p = await r.json();
       } catch (e) {
+        clearTimeout(slow);
+        clearTimeout(slower);
         // The demo must never stall on a dead endpoint: measure the frame here instead.
         source_ = 'local pixel analysis (vision server unreachable)';
         console.warn(`[scan] vision server failed (${e.message}) — falling back to local ` +
           'pixel analysis of the captured frame');
         p = localProps(ctx);
       }
+      clearTimeout(slow);
+      clearTimeout(slower);
       const ms = performance.now() - tScan;
 
       // --- 1. the five property values
