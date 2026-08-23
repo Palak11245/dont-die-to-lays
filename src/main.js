@@ -517,6 +517,7 @@ const magSize = (w) => Math.max(4, Math.min(30,
   Math.round(150 / (w.damage * 0.55 + w.pellets * 3.5))));
 let ammo = 0, magMax = 0, reloading = 0;   // reloading = seconds remaining
 let recoilPitch = 0, recoilVel = 0, gunKick = 0; // camera kick + gun kickback
+let localCd = 0; // local trigger cooldown, so P2 paces its own shots and ammo
 let heldGun = null;
 
 // The stats pick the silhouette. Same weapon config, five recognisable gun shapes.
@@ -593,6 +594,7 @@ function setViewmodel(thumbCanvas, weapon, pal) {
   heldGun = gun;
   magMax = magSize(w);
   ammo = magMax;
+  console.log(`[weapon] ${w.name} — ${gunType}, mag ${magMax}, ${w.damage}dmg ${w.fireRate}/s`);
   console.log(`[viewmodel] ${gun.userData.type} built from the scan palette`,
     Object.fromEntries(Object.entries(palette).map(([k, v]) =>
       [k, '#' + v.toString(16).padStart(6, '0')])));
@@ -803,7 +805,7 @@ function sendInput() {
     str: (keys.KeyD ? 1 : 0) - (keys.KeyA ? 1 : 0),
     ry: +controls.object.rotation.y.toFixed(3),
     rx: +controls.object.rotation.x.toFixed(3),
-    fire: firing && controls.isLocked,
+    fire: firing && controls.isLocked && ammo > 0 && reloading === 0,
     jump: !!keys.Space && controls.isLocked
   });
 }
@@ -934,6 +936,7 @@ const STRIDE = 2.0; // metres between footfalls
 let stride = 0;
 const hud = document.getElementById('hud');
 const clock = new THREE.Clock();
+let hudAcc = 0;
 
 function tick() {
   requestAnimationFrame(tick);
@@ -999,21 +1002,33 @@ function tick() {
     if (reloading === 0) { ammo = magMax; console.log('[weapon] reloaded'); }
   } else if (ammo === 0 && magMax) startReload();
 
-  if (firing && controls.isLocked && !IS_P2 && winner === null) {
-    if (ammo > 0 && reloading === 0) {
-      camera.getWorldDirection(_fwd);
-      const before = cooldowns[LOCAL];
-      fire(LOCAL, weapons[LOCAL], _origin.copy(camera.position), _fwd);
-      if (cooldowns[LOCAL] > before) { // a shot actually left the barrel
-        ammo--;
-        if (muzzle) muzzle.material.opacity = 1;
-        // Recoil scales with damage and pellet count and is damped by fire rate, so a slow
-        // cannon throws the view and an SMG only shudders.
-        const w = weapons[LOCAL];
-        recoilVel += (0.010 + w.damage / 900 + w.pellets / 320) * (1 - Math.min(0.5, w.fireRate / 24));
-        gunKick = Math.min(0.05, 0.012 + w.damage / 700);
+  // Trigger handling runs for BOTH players. P1 additionally resolves the shot against the
+  // world; P2 only produces local feel — flash, kick, sound, ammo — and lets its input packet
+  // tell P1 to do the actual damage. Previously this whole block was gated on !IS_P2, so P2
+  // had no gun feedback at all: no muzzle flash, no recoil, no sound, and ammo never moved,
+  // which also meant reload could never trigger.
+  if (localCd > 0) localCd -= dt * 60;
+  if (firing && controls.isLocked && winner === null) {
+    const w = weapons[LOCAL];
+    if (ammo > 0 && reloading === 0 && localCd <= 0) {
+      localCd = 60 / w.fireRate;
+      ammo--;
+      if (muzzle) muzzle.material.opacity = 1;
+      // Recoil scales with damage and pellet count and is damped by fire rate, so a slow
+      // cannon throws the view and an SMG only shudders.
+      recoilVel += (0.010 + w.damage / 900 + w.pellets / 320) * (1 - Math.min(0.5, w.fireRate / 24));
+      gunKick = Math.min(0.05, 0.012 + w.damage / 700);
+
+      if (!IS_P2) {
+        camera.getWorldDirection(_fwd);
+        fire(LOCAL, w, _origin.copy(camera.position), _fwd); // authoritative: plays its own sound
+      } else {
+        sfx.fire(gunType, w); // P1 resolves the damage; this is just the feel
       }
-    } else if (ammo === 0 && reloading === 0) sfx.dryFire();
+    } else if (ammo === 0 && reloading === 0 && localCd <= 0) {
+      localCd = 12;
+      sfx.dryFire();
+    }
   }
 
   // Recoil: a spring back to zero. Rises fast, settles over a few frames, never accumulates
@@ -1061,15 +1076,21 @@ function tick() {
     tracers.splice(i, 1);
   }
 
-  const w = weapons[LOCAL];
-  hud.innerHTML =
+  // Throttled to ~8Hz. Rebuilding innerHTML every frame forces an HTML parse plus a full
+  // layout 60 times a second, which is a serious framerate cost on a modest laptop.
+  hudAcc += dt;
+  if (hudAcc >= 0.125) {
+    hudAcc = 0;
+    const w = weapons[LOCAL];
+    hud.innerHTML =
     `HP ${me.hp} &nbsp;·&nbsp; enemy ${players[1 - LOCAL].hp}` +
     `<br><b style="color:#${w.colour.toString(16).padStart(6, '0')}">${w.name}</b>` +
     ` &nbsp; dmg ${w.damage} &nbsp; rate ${w.fireRate}/s &nbsp; spread ${w.spread}° &nbsp; ` +
     `pellets ${w.pellets}` +
     `<br>${reloading > 0 ? 'RELOADING…' : `ammo ${ammo}/${magMax}`}` +
     `${ammo === 0 && reloading === 0 ? ' — press R' : ''}` +
-    (SHOWCASE ? '<br>SHOWCASE' : `<br>${ROLE}${joined ? '' : ' waiting'}`);
+      (SHOWCASE ? '<br>SHOWCASE' : `<br>${ROLE}${joined ? '' : ' waiting'}`);
+  }
   renderer.render(scene, camera);
 
   // After the player's frame is presented, never before it.

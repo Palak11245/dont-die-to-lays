@@ -69,14 +69,18 @@ function pick(list, p, salt) {
 }
 
 export function nameFor(p) {
-  const top = Object.keys(p).reduce((a, b) => (p[a] > p[b] ? a : b));
+  // Only the five numeric axes take part — a caller passing extra keys (a name, a note)
+  // must not be able to win the dominant-axis comparison and break the lookup.
+  const keys = AXES.map((a) => a.key).filter((k) => typeof p[k] === 'number');
+  if (!keys.length) return 'Unmarked Relic';
+  const top = keys.reduce((a, b) => (p[a] > p[b] ? a : b));
   const archetype =
     p.sharpness > 0.6 && p.elongation > 0.6 ? 'Lance'
     : p.elongation < 0.4 && p.sharpness < 0.4 ? 'Scattergun'
     : p.mass > 0.65 ? 'Slugger'
     : p.energy > 0.6 ? 'Arc'
     : 'Popper';
-  const feeble = Math.max(...Object.values(p)) < 0.55;
+  const feeble = Math.max(...keys.map((k) => p[k])) < 0.55;
   const adj = pick(feeble ? FEEBLE : ADJECTIVES[top], p, feeble ? 11 : 7);
   return `${adj} ${pick(NOUNS[archetype], p, 23)}`;
 }

@@ -231,7 +231,20 @@ export function loadoutScreen(defaultWeapon) {
         });
     }
 
+    // Any failure at all must surface. Previously only the fetch was guarded, so an error
+    // after it left the screen stuck on "scanning..." with nothing in the UI to explain why.
     async function scan(source) {
+      try {
+        await runScan(source);
+      } catch (e) {
+        console.error('[scan] failed after the request:', e);
+        fail(`scan failed — ${e.message}`);
+        cam.style.display = cam.srcObject ? 'block' : 'none';
+        shot.style.display = 'none';
+      }
+    }
+
+    async function runScan(source) {
       scanBtn.disabled = true;
       ok('scanning…');
       // A cold server can take most of a minute; say so rather than looking frozen.
@@ -281,10 +294,14 @@ export function loadoutScreen(defaultWeapon) {
       }
 
       const rgb = dominantColour(ctx);
-      picked = weaponFrom(p, toHex(rgb));
+      // Split the name off FIRST. weaponFrom -> nameFor picks the dominant axis with
+      // Object.keys(p).reduce, so a stray string key wins that comparison and the whole
+      // derivation collapses. The formulas only ever see the five numbers.
+      const { name: visionName, ...props } = p;
+      picked = weaponFrom(props, toHex(rgb));
       // Claude names it from what the object actually is; the derived adjective+noun name
       // stays as the fallback when scoring came from local pixel analysis.
-      if (p.name) picked.name = p.name;
+      if (visionName) picked.name = visionName;
       thumb = feather(shot);
       pal = palette(ctx, rgb);
 
