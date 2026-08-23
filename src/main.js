@@ -532,8 +532,9 @@ function archetype(w) {
 // A real gun built from boxes and cylinders, painted in the scanned object's palette.
 function buildGun(w, pal) {
   const g = new THREE.Group();
-  const M = (c) => new THREE.MeshLambertMaterial({ color: c });
-  const body = M(pal.body), metal = M(pal.metal), accent = M(pal.accent);
+  // Phong with a tight highlight: a barrel needs a specular roll-off to look machined.
+  const M = (c, shine) => new THREE.MeshPhongMaterial({ color: c, shininess: shine, specular: 0x9aa4b2 });
+  const body = M(pal.body, 28), metal = M(pal.metal, 70), accent = M(pal.accent, 45);
   const add = (geo, mat, x, y, z, rx = 0) => {
     const m = new THREE.Mesh(geo, mat);
     m.position.set(x, y, z);
@@ -542,7 +543,7 @@ function buildGun(w, pal) {
     return m;
   };
   const box = (x, y, z) => new THREE.BoxGeometry(x, y, z);
-  const tube = (r, len) => new THREE.CylinderGeometry(r, r, len, 10);
+  const tube = (r, len) => new THREE.CylinderGeometry(r, r, len, 20); // smoother barrel
 
   const type = archetype(w);
   // Barrel length tracks accuracy, bore tracks pellet count — the shape reports the stats.
@@ -572,6 +573,12 @@ function buildGun(w, pal) {
   }
 
   g.userData.muzzleZ = -0.09 - barrelLen - (type === 'cannon' ? 0.07 : 0);
+  // An empty at the barrel tip: tracers start from here, so shots visibly leave the gun
+  // instead of appearing out of the middle of the screen.
+  const tip = new THREE.Object3D();
+  tip.position.set(type === 'shotgun' ? 0 : 0, 0.012, g.userData.muzzleZ);
+  g.add(tip);
+  g.userData.tip = tip;
   g.userData.type = type;
   return g;
 }
@@ -592,9 +599,6 @@ function setViewmodel(thumbCanvas, weapon, pal) {
   camera.add(gun);
   gunType = gun.userData.type;
   heldGun = gun;
-  magMax = magSize(w);
-  ammo = magMax;
-  console.log(`[weapon] ${w.name} — ${gunType}, mag ${magMax}, ${w.damage}dmg ${w.fireRate}/s`);
   console.log(`[viewmodel] ${gun.userData.type} built from the scan palette`,
     Object.fromEntries(Object.entries(palette).map(([k, v]) =>
       [k, '#' + v.toString(16).padStart(6, '0')])));
@@ -678,9 +682,16 @@ function showResult() {
   controls.unlock();
 }
 
+const _muzzleWorld = new THREE.Vector3();
+
 function tracer(origin, end, colour) {
+  // Draw from the barrel tip when the local player has a gun: the ray is still cast from the
+  // camera, so accuracy is untouched — only the visible line starts somewhere believable.
+  const from = (heldGun && heldGun.userData.tip)
+    ? heldGun.userData.tip.getWorldPosition(_muzzleWorld).clone()
+    : origin.clone();
   const line = new THREE.Line(
-    new THREE.BufferGeometry().setFromPoints([origin.clone(), end]),
+    new THREE.BufferGeometry().setFromPoints([from, end]),
     new THREE.LineBasicMaterial({ color: colour })
   );
   scene.add(line);
@@ -1147,8 +1158,20 @@ document.getElementById('waitSkip').addEventListener('click', dismissWaiting);
 
 loadoutScreen(DEFAULT_WEAPON).then(({ weapon, thumb, palette }) => {
   weapons[LOCAL] = weapon;
-  setViewmodel(thumb, weapon, palette);
+
+  // Arm the weapon BEFORE building the model. These used to be set inside setViewmodel, so
+  // any error while building the gun mesh left magMax at 0 — which reads as "ammo 0/0, cannot
+  // reload, cannot shoot". Ammo is game state; it must not depend on rendering succeeding.
+  magMax = magSize(weapon);
+  ammo = magMax;
+  console.log(`[weapon] ${weapon.name} — mag ${magMax}, ${weapon.damage}dmg ${weapon.fireRate}/s`);
+
+  try {
+    setViewmodel(thumb, weapon, palette);
+  } catch (e) {
+    console.error('[viewmodel] failed to build the gun — playing without it:', e);
+  }
   send({ type: 'loadout', weapon });
   console.log('[loadout]', weapon);
   if (IS_P2 && !SHOWCASE) showWaiting(); // P1 owns arena creation; P2 waits for it
-});
+}).catch((e) => console.error('[loadout] failed:', e));
